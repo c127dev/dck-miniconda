@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+CONDA_ACTIVATE_SCRIPT="${CONDA_INSTALL_PATH}/bin/activate"
+
+exec gosu "${USERNAME}" bash -c "
+    if [ -f \"${CONDA_ACTIVATE_SCRIPT}\" ]; then
+        source \"${CONDA_ACTIVATE_SCRIPT}\" base
+        bash
+    else
+        echo \"ERROR: Conda script not found ${CONDA_ACTIVATE_SCRIPT}\" >&2
+        echo \"ERROR: Can't start without conda activation.\" >&2
+        exit 1
+    fi
+"

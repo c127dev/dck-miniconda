@@ -1,0 +1,68 @@
+#!/bin/bash
+set -e
+
+USER_ID=${PUID:-1000}
+GROUP_ID=${PGID:-1000}
+USERNAME=${APP_USER:-appuser}
+
+echo "Starting Miniconda Setup..."
+
+if ! getent group "${USERNAME}" > /dev/null && ! getent group "${GROUP_ID}" > /dev/null; then
+    groupadd -g "${GROUP_ID}" "${USERNAME}"
+elif ! getent group "${USERNAME}" > /dev/null && getent group "${GROUP_ID}" > /dev/null; then
+    EXISTING_GROUP_NAME=$(getent group "${GROUP_ID}" | cut -d: -f1)
+    USERNAME_GROUP=${EXISTING_GROUP_NAME}
+else
+    USERNAME_GROUP=${USERNAME}
+fi
+USERNAME_GROUP=${USERNAME_GROUP:-$(getent group "${GROUP_ID}" | cut -d: -f1)}
+
+if ! id -u "${USERNAME}" > /dev/null 2>&1 && ! getent passwd "${USER_ID}" > /dev/null; then
+    useradd --shell /bin/bash -u "${USER_ID}" -g "${USERNAME_GROUP:-${GROUP_ID}}" -m -d "/app/home/${USERNAME}" "${USERNAME}"
+elif ! id -u "${USERNAME}" > /dev/null 2>&1 && getent passwd "${USER_ID}" > /dev/null; then
+    EXISTING_USER_NAME=$(getent passwd "${USER_ID}" | cut -d: -f1)
+    exit 1
+fi
+
+mkdir -p /app
+chown -R "${USER_ID}:${GROUP_ID}" /app
+
+if [ -d "/home/${USERNAME}" ]; then
+    chown -R "${USER_ID}:${GROUP_ID}" "/home/${USERNAME}"
+fi
+
+MINICONDA_ARCH_SUFFIX=""
+case "${TARGETARCH}" in
+    amd64) MINICONDA_ARCH_SUFFIX="x86_64" ;;
+    arm64) MINICONDA_ARCH_SUFFIX="aarch64" ;;
+    *) echo "ERROR: Architecture not supported: ${TARGETARCH}" >&2; exit 1 ;;
+esac
+
+CONDA_BIN_PATH="${CONDA_INSTALL_PATH}/bin/conda"
+CONDA_PYTHON_PATH="${CONDA_INSTALL_PATH}/bin/python"
+
+if [ ! -f "${CONDA_BIN_PATH}" ]; then
+    if ! curl -fsSL -o "${MINICONDA_INSTALLER_SCRIPT}" "https://repo.anaconda.com/miniconda/Miniconda3-${MINICONDA_VERSION}-Linux-${MINICONDA_ARCH_SUFFIX}.sh"; then
+        echo "ERROR: Error downloading Miniconda." >&2; exit 1
+    fi
+
+    echo "INFO: Installing Miniconda: ${CONDA_INSTALL_PATH}"
+    if ! /bin/bash "${MINICONDA_INSTALLER_SCRIPT}" -b -p "${CONDA_INSTALL_PATH}"; then
+        echo "ERROR: Error while installing miniconda." >&2; exit 1
+    fi
+    rm -f "${MINICONDA_INSTALLER_SCRIPT}"
+
+    chown "${USER_ID}:${GROUP_ID}" "${CONDA_INSTALL_PATH}"
+    gosu "${USERNAME}" bash -c "${CONDA_BIN_PATH} clean -afy" || echo "WARN: 'conda clean' failed as ${USERNAME}."
+else
+    echo "INFO: Miniconda already installed ${CONDA_INSTALL_PATH}."
+fi
+
+echo "INFO: Starting miniconda as user ${USERNAME}..."
+gosu "${USERNAME}" bash -c "${CONDA_BIN_PATH} init bash" || echo "WARN: 'conda init bash' failed as ${USERNAME}."
+chown -R "${USER_ID}:${GROUP_ID}" "${CONDA_INSTALL_PATH}"
+
+sudo usermod -aG sudo "${APP_USER}"
+echo -e "${APP_PASS}\n${APP_PASS}" | passwd "${APP_USER}"
+
+source /usr/local/bin/app-start
